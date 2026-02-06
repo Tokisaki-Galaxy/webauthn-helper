@@ -1,11 +1,27 @@
 [package]
-name = "rust-template"
-version = "0.1.0"
+name = "webauthn-helper"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
-description = "A Rust project template with multi-architecture cross-compilation CI/CD"
+description = "WebAuthn/FIDO2 CLI helper for OpenWrt routers"
 
 [dependencies]
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+webauthn-rs-core = "0.5"
+webauthn-rs-proto = "0.5"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+fs2 = "0.4"
+anyhow = "1"
+thiserror = "2"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
 
 # Optimize compilation size
 [profile.dev]
@@ -13,7 +29,8 @@ panic = "abort"
 
 [profile.release]
 debug = 0
-lto = "fat"
+opt-level = "z"
+lto = true
 codegen-units = 1
 panic = "abort"
-strip = "symbols"
+strip = true

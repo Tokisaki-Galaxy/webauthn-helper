@@ -1,0 +1,267 @@
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use chrono::Utc;
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+use webauthn_rs_core::proto::{Credential, CredentialID};
+
+use crate::errors::AppError;
+
+// ─── Internal Storage Structs (snake_case) ───
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CredentialStore {
+    pub users: std::collections::HashMap<String, UserRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRecord {
+    pub user_id: Uuid,
+    pub credentials: Vec<StoredCredential>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredCredential {
+    pub credential_id: String,
+    pub device_name: String,
+    pub credential: Credential,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub backup_eligible: bool,
+    pub user_verified: bool,
+}
+
+// ─── Challenge State ───
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChallengeState {
+    #[serde(rename = "type")]
+    pub challenge_type: ChallengeType,
+    pub username: String,
+    pub rp_id: String,
+    pub state: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChallengeType {
+    Registration,
+    Authentication,
+}
+
+// ─── StorageProvider Trait ───
+
+pub trait StorageProvider {
+    fn load_credentials(&self) -> Result<CredentialStore, AppError>;
+    fn save_credentials(&self, store: &CredentialStore) -> Result<(), AppError>;
+    fn load_challenge(&self, challenge_id: &str) -> Result<ChallengeState, AppError>;
+    fn save_challenge(&self, challenge_id: &str, state: &ChallengeState) -> Result<(), AppError>;
+    fn delete_challenge(&self, challenge_id: &str) -> Result<(), AppError>;
+    fn cleanup_challenges(&self) -> Result<usize, AppError>;
+    fn credentials_path(&self) -> &Path;
+}
+
+// ─── FileStorage Implementation ───
+
+pub struct FileStorage {
+    credentials_path: PathBuf,
+    challenge_dir: PathBuf,
+}
+
+impl FileStorage {
+    pub fn new() -> Self {
+        Self {
+            credentials_path: PathBuf::from("/etc/webauthn/credentials.json"),
+            challenge_dir: PathBuf::from("/tmp/webauthn/challenges"),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_paths(credentials_path: PathBuf, challenge_dir: PathBuf) -> Self {
+        Self {
+            credentials_path,
+            challenge_dir,
+        }
+    }
+}
+
+impl StorageProvider for FileStorage {
+    fn load_credentials(&self) -> Result<CredentialStore, AppError> {
+        if !self.credentials_path.exists() {
+            return Ok(CredentialStore::default());
+        }
+        let data = fs::read_to_string(&self.credentials_path)?;
+        let store: CredentialStore = serde_json::from_str(&data)?;
+        Ok(store)
+    }
+
+    fn save_credentials(&self, store: &CredentialStore) -> Result<(), AppError> {
+        if let Some(parent) = self.credentials_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&self.credentials_path)?;
+
+        // Acquire exclusive lock
+        file.lock_exclusive()
+            .map_err(|e| AppError::Storage(format!("Failed to acquire file lock: {}", e)))?;
+
+        let data = serde_json::to_string_pretty(store)?;
+        (&file).write_all(data.as_bytes())?;
+
+        // Lock is released when file is dropped
+        Ok(())
+    }
+
+    fn load_challenge(&self, challenge_id: &str) -> Result<ChallengeState, AppError> {
+        let path = self.challenge_dir.join(format!("{}.json", challenge_id));
+        if !path.exists() {
+            return Err(AppError::ChallengeNotFound(challenge_id.to_string()));
+        }
+        let data = fs::read_to_string(&path)?;
+        let state: ChallengeState = serde_json::from_str(&data)?;
+        Ok(state)
+    }
+
+    fn save_challenge(&self, challenge_id: &str, state: &ChallengeState) -> Result<(), AppError> {
+        fs::create_dir_all(&self.challenge_dir)?;
+        let path = self.challenge_dir.join(format!("{}.json", challenge_id));
+        let data = serde_json::to_string_pretty(state)?;
+        fs::write(&path, data)?;
+        Ok(())
+    }
+
+    fn delete_challenge(&self, challenge_id: &str) -> Result<(), AppError> {
+        let path = self.challenge_dir.join(format!("{}.json", challenge_id));
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    fn cleanup_challenges(&self) -> Result<usize, AppError> {
+        if !self.challenge_dir.exists() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        let now = SystemTime::now();
+        let max_age = std::time::Duration::from_secs(120); // 2 minutes
+
+        for entry in fs::read_dir(&self.challenge_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(age) = now.duration_since(modified) {
+                            if age > max_age {
+                                fs::remove_file(&path)?;
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    fn credentials_path(&self) -> &Path {
+        &self.credentials_path
+    }
+}
+
+// ─── Helper Functions ───
+
+pub fn encode_credential_id(cred_id: &CredentialID) -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    URL_SAFE_NO_PAD.encode(cred_id.as_ref())
+}
+
+pub fn now_iso8601() -> String {
+    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn test_storage() -> (FileStorage, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let cred_path = dir.path().join("credentials.json");
+        let challenge_dir = dir.path().join("challenges");
+        let storage = FileStorage::with_paths(cred_path, challenge_dir);
+        (storage, dir)
+    }
+
+    #[test]
+    fn test_load_empty_credentials() {
+        let (storage, _dir) = test_storage();
+        let store = storage.load_credentials().unwrap();
+        assert!(store.users.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_credentials() {
+        let (storage, _dir) = test_storage();
+        let mut store = CredentialStore::default();
+        store.users.insert(
+            "root".to_string(),
+            UserRecord {
+                user_id: Uuid::new_v4(),
+                credentials: vec![],
+            },
+        );
+        storage.save_credentials(&store).unwrap();
+        let loaded = storage.load_credentials().unwrap();
+        assert!(loaded.users.contains_key("root"));
+    }
+
+    #[test]
+    fn test_challenge_lifecycle() {
+        let (storage, _dir) = test_storage();
+        let challenge_id = Uuid::new_v4().to_string();
+        let state = ChallengeState {
+            challenge_type: ChallengeType::Registration,
+            username: "root".to_string(),
+            rp_id: "192.168.1.1".to_string(),
+            state: serde_json::json!({"test": true}),
+            created_at: now_iso8601(),
+        };
+
+        storage.save_challenge(&challenge_id, &state).unwrap();
+        let loaded = storage.load_challenge(&challenge_id).unwrap();
+        assert_eq!(loaded.username, "root");
+        assert_eq!(loaded.challenge_type, ChallengeType::Registration);
+
+        storage.delete_challenge(&challenge_id).unwrap();
+        assert!(storage.load_challenge(&challenge_id).is_err());
+    }
+
+    #[test]
+    fn test_challenge_not_found() {
+        let (storage, _dir) = test_storage();
+        let result = storage.load_challenge("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cleanup_challenges() {
+        let (storage, _dir) = test_storage();
+        let result = storage.cleanup_challenges().unwrap();
+        assert_eq!(result, 0);
+    }
+}
