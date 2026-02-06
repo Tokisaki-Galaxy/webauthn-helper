@@ -1,0 +1,19 @@
+[package]
+name = "rust-template"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A Rust project template with multi-architecture cross-compilation CI/CD"
+
+[dependencies]
+
+# Optimize compilation size
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+debug = 0
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
