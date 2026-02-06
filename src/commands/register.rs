@@ -131,6 +131,13 @@ pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin
     let credential_id = encode_credential_id(&credential.cred_id);
     let created_at = now_iso8601();
 
+    // Extract AAGUID from attestation metadata if available
+    let aaguid = match &credential.attestation.metadata {
+        AttestationMetadata::Packed { aaguid } => aaguid.to_string(),
+        AttestationMetadata::Tpm { aaguid, .. } => aaguid.to_string(),
+        _ => "00000000-0000-0000-0000-000000000000".to_string(),
+    };
+
     // Save credential
     let mut store = storage.load_credentials()?;
     let user_record = store.users.entry(challenge.username.clone()).or_insert_with(|| UserRecord {
@@ -141,11 +148,11 @@ pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin
     user_record.credentials.push(StoredCredential {
         credential_id: credential_id.clone(),
         device_name: device_name.to_string(),
+        backup_eligible: credential.backup_eligible,
+        user_verified: credential.user_verified,
         credential,
         created_at: created_at.clone(),
         last_used_at: None,
-        backup_eligible: false,
-        user_verified: false,
     });
     storage.save_credentials(&store)?;
 
@@ -154,7 +161,7 @@ pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin
 
     let data = RegisterFinishData {
         credential_id,
-        aaguid: "00000000-0000-0000-0000-000000000000".to_string(),
+        aaguid,
         created_at,
     };
     let response = SuccessResponse::new(data);

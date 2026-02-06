@@ -12,6 +12,9 @@ use webauthn_rs_core::proto::{Credential, CredentialID};
 
 use crate::errors::AppError;
 
+/// Challenge files older than this are considered expired (2 minutes)
+const CHALLENGE_MAX_AGE_SECS: u64 = 120;
+
 // ─── Internal Storage Structs (snake_case) ───
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -156,7 +159,7 @@ impl StorageProvider for FileStorage {
         }
         let mut count = 0;
         let now = SystemTime::now();
-        let max_age = std::time::Duration::from_secs(120); // 2 minutes
+        let max_age = std::time::Duration::from_secs(CHALLENGE_MAX_AGE_SECS);
 
         for entry in fs::read_dir(&self.challenge_dir)? {
             let entry = entry?;
