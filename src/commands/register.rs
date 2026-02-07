@@ -180,17 +180,25 @@ pub fn register_finish(
     let created_at = now_iso8601();
     let aaguid = format_aaguid(metadata.aaguid.data());
 
-    // Encode parts for storage
-    let static_state_bytes = static_state.encode().unwrap();
+    // Encode parts for storage (these use Infallible error types)
+    let static_state_bytes = static_state
+        .encode()
+        .expect("StaticState encode is infallible");
     let static_state_b64 = URL_SAFE_NO_PAD.encode(&static_state_bytes);
 
-    let dynamic_state_bytes = dynamic_state.encode().unwrap();
+    let dynamic_state_bytes = dynamic_state
+        .encode()
+        .expect("DynamicState encode is infallible");
     let dynamic_state_b64 = URL_SAFE_NO_PAD.encode(dynamic_state_bytes);
 
-    let user_handle_bytes = user_id.encode().unwrap();
+    let user_handle_bytes = user_id
+        .encode()
+        .expect("UserHandle encode is infallible");
     let user_handle_b64 = URL_SAFE_NO_PAD.encode(user_handle_bytes);
 
-    let transports_u8 = transports.encode().unwrap();
+    let transports_u8 = transports
+        .encode()
+        .expect("AuthTransports encode is infallible");
     let backup_eligible = !matches!(dynamic_state.backup, Backup::NotEligible);
 
     // Save credential

@@ -211,7 +211,9 @@ pub fn login_finish(
     if let Some(user_record) = store.users.get_mut(&challenge.username) {
         for cred in &mut user_record.credentials {
             if cred.credential_id == response_cred_id_b64 {
-                let ds_bytes = new_ds.encode().unwrap();
+                let ds_bytes = new_ds
+                    .encode()
+                    .expect("DynamicState encode is infallible");
                 cred.dynamic_state = URL_SAFE_NO_PAD.encode(ds_bytes);
                 cred.sign_count = new_ds.sign_count;
                 cred.user_verified = new_ds.user_verified;
