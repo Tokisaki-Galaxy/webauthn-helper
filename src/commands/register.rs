@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use webauthn_rp::bin::{Decode, Encode};
 use webauthn_rp::request::register::{PublicKeyCredentialUserEntity, RegistrationVerificationOptions, UserHandle64};
-use webauthn_rp::request::{AsciiDomain, PublicKeyCredentialDescriptor, RpId};
+use webauthn_rp::request::{AsciiDomain, PublicKeyCredentialDescriptor, RpId, UserVerificationRequirement};
 use webauthn_rp::response::{AuthTransports, Backup, CredentialId};
 use webauthn_rp::{PublicKeyCredentialCreationOptions, Registration, RegistrationServerState};
 
@@ -40,7 +40,7 @@ fn extract_host(origin: &str) -> Option<&str> {
     Some(authority.rsplit_once(':').map_or(authority, |(h, _)| h))
 }
 
-pub fn register_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str, _user_verification: &str) -> Result<String, AppError> {
+pub fn register_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str, user_verification: &str) -> Result<String, AppError> {
     let rp = make_rp_id(rp_id)?;
     let store = storage.load_credentials()?;
 
@@ -60,7 +60,8 @@ pub fn register_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str
             .filter_map(|c| {
                 let id_bytes = URL_SAFE_NO_PAD.decode(&c.credential_id).ok()?;
                 let cred_id = CredentialId::<Vec<u8>>::decode(id_bytes).ok()?;
-                let transports = AuthTransports::decode(c.transports).unwrap_or(AuthTransports::decode(0).unwrap());
+                let transports =
+                    AuthTransports::decode(c.transports).unwrap_or_else(|_| AuthTransports::decode(0u8).expect("zero is always valid"));
                 Some(PublicKeyCredentialDescriptor { id: cred_id, transports })
             })
             .collect();
@@ -81,7 +82,21 @@ pub fn register_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str
         ),
     };
 
-    let options = PublicKeyCredentialCreationOptions::passkey(&rp, user_entity, exclude_creds);
+    let mut options = PublicKeyCredentialCreationOptions::passkey(&rp, user_entity, exclude_creds);
+
+    // Apply user verification policy from CLI argument
+    let uv = match user_verification {
+        "required" => UserVerificationRequirement::Required,
+        "discouraged" => UserVerificationRequirement::Discouraged,
+        _ => UserVerificationRequirement::Preferred,
+    };
+    options.authenticator_selection.user_verification = uv;
+    // When UV is not Required, clear extensions that require UV to avoid validation errors
+    if !matches!(uv, UserVerificationRequirement::Required) {
+        options.extensions.cred_protect = webauthn_rp::request::register::CredProtect::None;
+        options.extensions.prf = None;
+    }
+
     let (server_state, client_state) = options.start_ceremony().map_err(|e| AppError::WebAuthn(e.to_string()))?;
 
     // Encode server state to binary and base64

@@ -17,6 +17,9 @@ use crate::errors::AppError;
 use crate::schemas::{LoginFinishData, SuccessResponse};
 use crate::storage::*;
 
+/// Type alias for the decoded StaticState with compressed public key types.
+type StoredStaticState = StaticState<CompressedPubKey<[u8; 32], [u8; 32], [u8; 48], Vec<u8>>>;
+
 fn make_rp_id(rp_id: &str) -> Result<RpId, AppError> {
     AsciiDomain::try_from(rp_id.to_owned())
         .map(RpId::Domain)
@@ -49,7 +52,8 @@ pub fn login_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str) -
             .decode(&cred.credential_id)
             .map_err(|e| AppError::Storage(format!("Failed to decode credential ID: {}", e)))?;
         let cred_id = CredentialId::<Vec<u8>>::decode(id_bytes).map_err(|e| AppError::Storage(format!("Invalid credential ID: {}", e)))?;
-        let transports = AuthTransports::decode(cred.transports).unwrap_or(AuthTransports::decode(0).unwrap());
+        let transports =
+            AuthTransports::decode(cred.transports).unwrap_or_else(|_| AuthTransports::decode(0u8).expect("zero is always valid"));
         allowed_creds.push(PublicKeyCredentialDescriptor { id: cred_id, transports }.into());
     }
 
@@ -133,9 +137,8 @@ pub fn login_finish(storage: &dyn StorageProvider, challenge_id: &str, origin_st
     let static_state_bytes = URL_SAFE_NO_PAD
         .decode(&stored_cred.static_state)
         .map_err(|e| AppError::Storage(format!("Failed to decode static state: {}", e)))?;
-    let static_state: StaticState<CompressedPubKey<[u8; 32], [u8; 32], [u8; 48], Vec<u8>>> =
-        StaticState::decode(static_state_bytes.as_slice())
-            .map_err(|e| AppError::Storage(format!("Failed to decode static state: {}", e)))?;
+    let static_state: StoredStaticState = StaticState::decode(static_state_bytes.as_slice())
+        .map_err(|e| AppError::Storage(format!("Failed to decode static state: {}", e)))?;
 
     let dynamic_state_bytes = URL_SAFE_NO_PAD
         .decode(&stored_cred.dynamic_state)
