@@ -4,7 +4,7 @@ set -e
 source ~/.cargo/env
 
 # Define project name and version
-PROJECT_NAME="rust-template"
+PROJECT_NAME="webauthn-helper"
 VERSION=$(grep "^version" Cargo.toml | cut -d '"' -f2)
 echo "Build version: $VERSION"
 
