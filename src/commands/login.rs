@@ -9,8 +9,8 @@ use webauthn_rp::request::{AsciiDomain, Credentials, PublicKeyCredentialDescript
 use webauthn_rp::response::register::{CompressedPubKey, DynamicState, StaticState};
 use webauthn_rp::response::{AuthTransports, Backup, CredentialId};
 use webauthn_rp::{
-    AuthenticatedCredential, NonDiscoverableAuthentication64,
-    NonDiscoverableAuthenticationServerState, NonDiscoverableCredentialRequestOptions,
+    AuthenticatedCredential, NonDiscoverableAuthentication64, NonDiscoverableAuthenticationServerState,
+    NonDiscoverableCredentialRequestOptions,
 };
 
 use crate::errors::AppError;
@@ -24,18 +24,12 @@ fn make_rp_id(rp_id: &str) -> Result<RpId, AppError> {
 }
 
 fn extract_host(origin: &str) -> Option<&str> {
-    let rest = origin
-        .strip_prefix("https://")
-        .or_else(|| origin.strip_prefix("http://"))?;
+    let rest = origin.strip_prefix("https://").or_else(|| origin.strip_prefix("http://"))?;
     let authority = rest.split('/').next().unwrap_or(rest);
     Some(authority.rsplit_once(':').map_or(authority, |(h, _)| h))
 }
 
-pub fn login_begin(
-    storage: &dyn StorageProvider,
-    username: &str,
-    rp_id: &str,
-) -> Result<String, AppError> {
+pub fn login_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str) -> Result<String, AppError> {
     let rp = make_rp_id(rp_id)?;
 
     let store = storage.load_credentials()?;
@@ -45,10 +39,7 @@ pub fn login_begin(
         .ok_or_else(|| AppError::UserNotFound(username.to_string()))?;
 
     if user_record.credentials.is_empty() {
-        return Err(AppError::UserNotFound(format!(
-            "No credentials found for user: {}",
-            username
-        )));
+        return Err(AppError::UserNotFound(format!("No credentials found for user: {}", username)));
     }
 
     // Build AllowedCredentials
@@ -57,25 +48,15 @@ pub fn login_begin(
         let id_bytes = URL_SAFE_NO_PAD
             .decode(&cred.credential_id)
             .map_err(|e| AppError::Storage(format!("Failed to decode credential ID: {}", e)))?;
-        let cred_id = CredentialId::<Vec<u8>>::decode(id_bytes)
-            .map_err(|e| AppError::Storage(format!("Invalid credential ID: {}", e)))?;
-        let transports =
-            AuthTransports::decode(cred.transports).unwrap_or(AuthTransports::decode(0).unwrap());
-        allowed_creds.push(
-            PublicKeyCredentialDescriptor {
-                id: cred_id,
-                transports,
-            }
-            .into(),
-        );
+        let cred_id = CredentialId::<Vec<u8>>::decode(id_bytes).map_err(|e| AppError::Storage(format!("Invalid credential ID: {}", e)))?;
+        let transports = AuthTransports::decode(cred.transports).unwrap_or(AuthTransports::decode(0).unwrap());
+        allowed_creds.push(PublicKeyCredentialDescriptor { id: cred_id, transports }.into());
     }
 
-    let options = NonDiscoverableCredentialRequestOptions::second_factor(&rp, allowed_creds)
-        .map_err(|e| AppError::WebAuthn(e.to_string()))?;
+    let options =
+        NonDiscoverableCredentialRequestOptions::second_factor(&rp, allowed_creds).map_err(|e| AppError::WebAuthn(e.to_string()))?;
 
-    let (server_state, client_state) = options
-        .start_ceremony()
-        .map_err(|e| AppError::WebAuthn(e.to_string()))?;
+    let (server_state, client_state) = options.start_ceremony().map_err(|e| AppError::WebAuthn(e.to_string()))?;
 
     // Encode server state
     let state_bytes = server_state
@@ -102,11 +83,7 @@ pub fn login_begin(
     Ok(serde_json::to_string(&response)?)
 }
 
-pub fn login_finish(
-    storage: &dyn StorageProvider,
-    challenge_id: &str,
-    origin_str: &str,
-) -> Result<String, AppError> {
+pub fn login_finish(storage: &dyn StorageProvider, challenge_id: &str, origin_str: &str) -> Result<String, AppError> {
     let challenge = storage.load_challenge(challenge_id)?;
     if challenge.challenge_type != ChallengeType::Authentication {
         return Err(AppError::InvalidInput(
@@ -114,8 +91,7 @@ pub fn login_finish(
         ));
     }
 
-    let origin_host = extract_host(origin_str)
-        .ok_or_else(|| AppError::InvalidOrigin("Origin has no host".to_string()))?;
+    let origin_host = extract_host(origin_str).ok_or_else(|| AppError::InvalidOrigin("Origin has no host".to_string()))?;
     if origin_host != challenge.rp_id {
         return Err(AppError::InvalidOrigin(format!(
             "Origin {} does not match RP ID {}",
@@ -129,10 +105,8 @@ pub fn login_finish(
     let state_bytes = URL_SAFE_NO_PAD
         .decode(&challenge.state)
         .map_err(|e| AppError::Storage(format!("Failed to decode server state: {}", e)))?;
-    let server_state =
-        NonDiscoverableAuthenticationServerState::decode(state_bytes.as_slice()).map_err(|e| {
-            AppError::Storage(format!("Failed to decode authentication state: {}", e))
-        })?;
+    let server_state = NonDiscoverableAuthenticationServerState::decode(state_bytes.as_slice())
+        .map_err(|e| AppError::Storage(format!("Failed to decode authentication state: {}", e)))?;
 
     // Read client response from stdin
     let mut input = String::new();
@@ -169,8 +143,7 @@ pub fn login_finish(
     let ds_array: [u8; 7] = dynamic_state_bytes
         .try_into()
         .map_err(|_| AppError::Storage("Invalid dynamic state length".to_string()))?;
-    let dynamic_state = DynamicState::decode(ds_array)
-        .map_err(|e| AppError::Storage(format!("Failed to decode dynamic state: {}", e)))?;
+    let dynamic_state = DynamicState::decode(ds_array).map_err(|e| AppError::Storage(format!("Failed to decode dynamic state: {}", e)))?;
 
     let user_handle_bytes = URL_SAFE_NO_PAD
         .decode(&stored_cred.user_handle)
@@ -178,26 +151,19 @@ pub fn login_finish(
     let uh_array: [u8; 64] = user_handle_bytes
         .try_into()
         .map_err(|_| AppError::Storage("Invalid user handle length".to_string()))?;
-    let user_handle = UserHandle64::decode(uh_array)
-        .map_err(|e| AppError::Storage(format!("Failed to decode user handle: {}", e)))?;
+    let user_handle = UserHandle64::decode(uh_array).map_err(|e| AppError::Storage(format!("Failed to decode user handle: {}", e)))?;
 
     // Build AuthenticatedCredential
-    let mut auth_cred = AuthenticatedCredential::new(
-        auth_response.raw_id(),
-        &user_handle,
-        static_state,
-        dynamic_state,
-    )
-    .map_err(|e| AppError::WebAuthn(format!("Failed to create authenticated credential: {}", e)))?;
+    let mut auth_cred = AuthenticatedCredential::new(auth_response.raw_id(), &user_handle, static_state, dynamic_state)
+        .map_err(|e| AppError::WebAuthn(format!("Failed to create authenticated credential: {}", e)))?;
 
     // Verify authentication
-    let ver_opts: AuthenticationVerificationOptions<'_, '_, String, String> =
-        AuthenticationVerificationOptions {
-            allowed_origins: &[origin_str.to_string()],
-            error_on_unsolicited_extensions: false,
-            update_uv: true,
-            ..Default::default()
-        };
+    let ver_opts: AuthenticationVerificationOptions<'_, '_, String, String> = AuthenticationVerificationOptions {
+        allowed_origins: &[origin_str.to_string()],
+        error_on_unsolicited_extensions: false,
+        update_uv: true,
+        ..Default::default()
+    };
     server_state
         .verify(&rp, &auth_response, &mut auth_cred, &ver_opts)
         .map_err(|e| AppError::WebAuthn(e.to_string()))?;
@@ -211,9 +177,7 @@ pub fn login_finish(
     if let Some(user_record) = store.users.get_mut(&challenge.username) {
         for cred in &mut user_record.credentials {
             if cred.credential_id == response_cred_id_b64 {
-                let ds_bytes = new_ds
-                    .encode()
-                    .expect("DynamicState encode is infallible");
+                let ds_bytes = new_ds.encode().expect("DynamicState encode is infallible");
                 cred.dynamic_state = URL_SAFE_NO_PAD.encode(ds_bytes);
                 cred.sign_count = new_ds.sign_count;
                 cred.user_verified = new_ds.user_verified;

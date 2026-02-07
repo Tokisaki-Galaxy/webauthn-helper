@@ -3,9 +3,7 @@ use base64::Engine;
 use uuid::Uuid;
 
 use webauthn_rp::bin::{Decode, Encode};
-use webauthn_rp::request::register::{
-    PublicKeyCredentialUserEntity, RegistrationVerificationOptions, UserHandle64,
-};
+use webauthn_rp::request::register::{PublicKeyCredentialUserEntity, RegistrationVerificationOptions, UserHandle64};
 use webauthn_rp::request::{AsciiDomain, PublicKeyCredentialDescriptor, RpId};
 use webauthn_rp::response::{AuthTransports, Backup, CredentialId};
 use webauthn_rp::{PublicKeyCredentialCreationOptions, Registration, RegistrationServerState};
@@ -37,19 +35,12 @@ fn format_aaguid(bytes: &[u8]) -> String {
 }
 
 fn extract_host(origin: &str) -> Option<&str> {
-    let rest = origin
-        .strip_prefix("https://")
-        .or_else(|| origin.strip_prefix("http://"))?;
+    let rest = origin.strip_prefix("https://").or_else(|| origin.strip_prefix("http://"))?;
     let authority = rest.split('/').next().unwrap_or(rest);
     Some(authority.rsplit_once(':').map_or(authority, |(h, _)| h))
 }
 
-pub fn register_begin(
-    storage: &dyn StorageProvider,
-    username: &str,
-    rp_id: &str,
-    _user_verification: &str,
-) -> Result<String, AppError> {
+pub fn register_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str, _user_verification: &str) -> Result<String, AppError> {
     let rp = make_rp_id(rp_id)?;
     let store = storage.load_credentials()?;
 
@@ -61,8 +52,7 @@ pub fn register_begin(
         let uh_array: [u8; 64] = uh_bytes
             .try_into()
             .map_err(|_| AppError::Storage("Invalid user handle length".to_string()))?;
-        let uh = UserHandle64::decode(uh_array)
-            .map_err(|e| AppError::Storage(format!("Failed to decode user handle: {}", e)))?;
+        let uh = UserHandle64::decode(uh_array).map_err(|e| AppError::Storage(format!("Failed to decode user handle: {}", e)))?;
 
         let creds: Vec<PublicKeyCredentialDescriptor<Vec<u8>>> = user_record
             .credentials
@@ -70,12 +60,8 @@ pub fn register_begin(
             .filter_map(|c| {
                 let id_bytes = URL_SAFE_NO_PAD.decode(&c.credential_id).ok()?;
                 let cred_id = CredentialId::<Vec<u8>>::decode(id_bytes).ok()?;
-                let transports =
-                    AuthTransports::decode(c.transports).unwrap_or(AuthTransports::decode(0).unwrap());
-                Some(PublicKeyCredentialDescriptor {
-                    id: cred_id,
-                    transports,
-                })
+                let transports = AuthTransports::decode(c.transports).unwrap_or(AuthTransports::decode(0).unwrap());
+                Some(PublicKeyCredentialDescriptor { id: cred_id, transports })
             })
             .collect();
         (uh, creds)
@@ -96,9 +82,7 @@ pub fn register_begin(
     };
 
     let options = PublicKeyCredentialCreationOptions::passkey(&rp, user_entity, exclude_creds);
-    let (server_state, client_state) = options
-        .start_ceremony()
-        .map_err(|e| AppError::WebAuthn(e.to_string()))?;
+    let (server_state, client_state) = options.start_ceremony().map_err(|e| AppError::WebAuthn(e.to_string()))?;
 
     // Encode server state to binary and base64
     let state_bytes = server_state
@@ -125,21 +109,13 @@ pub fn register_begin(
     Ok(serde_json::to_string(&response)?)
 }
 
-pub fn register_finish(
-    storage: &dyn StorageProvider,
-    challenge_id: &str,
-    origin_str: &str,
-    device_name: &str,
-) -> Result<String, AppError> {
+pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin_str: &str, device_name: &str) -> Result<String, AppError> {
     let challenge = storage.load_challenge(challenge_id)?;
     if challenge.challenge_type != ChallengeType::Registration {
-        return Err(AppError::InvalidInput(
-            "Challenge is not a registration challenge".to_string(),
-        ));
+        return Err(AppError::InvalidInput("Challenge is not a registration challenge".to_string()));
     }
 
-    let origin_host = extract_host(origin_str)
-        .ok_or_else(|| AppError::InvalidOrigin("Origin has no host".to_string()))?;
+    let origin_host = extract_host(origin_str).ok_or_else(|| AppError::InvalidOrigin("Origin has no host".to_string()))?;
     if origin_host != challenge.rp_id {
         return Err(AppError::InvalidOrigin(format!(
             "Origin {} does not match RP ID {}",
@@ -159,57 +135,44 @@ pub fn register_finish(
     // Read client response from stdin
     let mut input = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
-    let registration = Registration::from_json_relaxed(input.as_bytes())
-        .map_err(|e| AppError::InvalidInput(format!("Invalid client response: {}", e)))?;
+    let registration =
+        Registration::from_json_relaxed(input.as_bytes()).map_err(|e| AppError::InvalidInput(format!("Invalid client response: {}", e)))?;
 
     // Verify registration
-    let ver_opts: RegistrationVerificationOptions<'_, '_, String, String> =
-        RegistrationVerificationOptions {
-            allowed_origins: &[origin_str.to_string()],
-            error_on_unsolicited_extensions: false,
-            ..Default::default()
-        };
+    let ver_opts: RegistrationVerificationOptions<'_, '_, String, String> = RegistrationVerificationOptions {
+        allowed_origins: &[origin_str.to_string()],
+        error_on_unsolicited_extensions: false,
+        ..Default::default()
+    };
     let credential = server_state
         .verify(&rp, &registration, &ver_opts)
         .map_err(|e| AppError::WebAuthn(e.to_string()))?;
 
-    let (cred_id, transports, user_id, static_state, dynamic_state, metadata) =
-        credential.into_parts();
+    let (cred_id, transports, user_id, static_state, dynamic_state, metadata) = credential.into_parts();
 
     let credential_id_str = URL_SAFE_NO_PAD.encode(cred_id.as_ref());
     let created_at = now_iso8601();
     let aaguid = format_aaguid(metadata.aaguid.data());
 
     // Encode parts for storage (these use Infallible error types)
-    let static_state_bytes = static_state
-        .encode()
-        .expect("StaticState encode is infallible");
+    let static_state_bytes = static_state.encode().expect("StaticState encode is infallible");
     let static_state_b64 = URL_SAFE_NO_PAD.encode(&static_state_bytes);
 
-    let dynamic_state_bytes = dynamic_state
-        .encode()
-        .expect("DynamicState encode is infallible");
+    let dynamic_state_bytes = dynamic_state.encode().expect("DynamicState encode is infallible");
     let dynamic_state_b64 = URL_SAFE_NO_PAD.encode(dynamic_state_bytes);
 
-    let user_handle_bytes = user_id
-        .encode()
-        .expect("UserHandle encode is infallible");
+    let user_handle_bytes = user_id.encode().expect("UserHandle encode is infallible");
     let user_handle_b64 = URL_SAFE_NO_PAD.encode(user_handle_bytes);
 
-    let transports_u8 = transports
-        .encode()
-        .expect("AuthTransports encode is infallible");
+    let transports_u8 = transports.encode().expect("AuthTransports encode is infallible");
     let backup_eligible = !matches!(dynamic_state.backup, Backup::NotEligible);
 
     // Save credential
     let mut store = storage.load_credentials()?;
-    let user_record = store
-        .users
-        .entry(challenge.username.clone())
-        .or_insert_with(|| UserRecord {
-            user_id: user_handle_b64.clone(),
-            credentials: vec![],
-        });
+    let user_record = store.users.entry(challenge.username.clone()).or_insert_with(|| UserRecord {
+        user_id: user_handle_b64.clone(),
+        credentials: vec![],
+    });
 
     user_record.credentials.push(StoredCredential {
         credential_id: credential_id_str.clone(),
