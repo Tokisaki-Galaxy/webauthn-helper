@@ -7,8 +7,6 @@ use std::time::SystemTime;
 use chrono::Utc;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use webauthn_rs_core::proto::{Credential, CredentialID};
 
 use crate::errors::AppError;
 
@@ -24,7 +22,7 @@ pub struct CredentialStore {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserRecord {
-    pub user_id: Uuid,
+    pub user_id: String,
     pub credentials: Vec<StoredCredential>,
 }
 
@@ -32,11 +30,15 @@ pub struct UserRecord {
 pub struct StoredCredential {
     pub credential_id: String,
     pub device_name: String,
-    pub credential: Credential,
+    pub static_state: String,
+    pub dynamic_state: String,
+    pub user_handle: String,
+    pub transports: u8,
     pub created_at: String,
     pub last_used_at: Option<String>,
     pub backup_eligible: bool,
     pub user_verified: bool,
+    pub sign_count: u32,
 }
 
 // ─── Challenge State ───
@@ -47,7 +49,7 @@ pub struct ChallengeState {
     pub challenge_type: ChallengeType,
     pub username: String,
     pub rp_id: String,
-    pub state: serde_json::Value,
+    pub state: String,
     pub created_at: String,
 }
 
@@ -187,12 +189,6 @@ impl StorageProvider for FileStorage {
 
 // ─── Helper Functions ───
 
-pub fn encode_credential_id(cred_id: &CredentialID) -> String {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    URL_SAFE_NO_PAD.encode(cred_id.as_ref())
-}
-
 pub fn now_iso8601() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
@@ -224,7 +220,7 @@ mod tests {
         store.users.insert(
             "root".to_string(),
             UserRecord {
-                user_id: Uuid::new_v4(),
+                user_id: "test_user_id".to_string(),
                 credentials: vec![],
             },
         );
@@ -236,12 +232,12 @@ mod tests {
     #[test]
     fn test_challenge_lifecycle() {
         let (storage, _dir) = test_storage();
-        let challenge_id = Uuid::new_v4().to_string();
+        let challenge_id = uuid::Uuid::new_v4().to_string();
         let state = ChallengeState {
             challenge_type: ChallengeType::Registration,
             username: "root".to_string(),
             rp_id: "192.168.1.1".to_string(),
-            state: serde_json::json!({"test": true}),
+            state: "test_state_data".to_string(),
             created_at: now_iso8601(),
         };
 
