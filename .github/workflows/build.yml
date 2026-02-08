@@ -103,6 +103,7 @@ jobs:
         if: ${{ matrix.use_nightly }}
         uses: dtolnay/rust-toolchain@nightly
         with:
+          targets: ${{ matrix.target }}
           components: rust-src
 
       - name: Install cross
