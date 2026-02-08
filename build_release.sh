@@ -1,52 +1,36 @@
 #!/bin/bash
 set -e
 
-source ~/.cargo/env
-
 # Define project name and version
 PROJECT_NAME="webauthn-helper"
 VERSION=$(grep "^version" Cargo.toml | cut -d '"' -f2)
 echo "Build version: $VERSION"
 
-# Ensure target directory exists
+# Check if cross is installed
+if ! command -v cross &> /dev/null; then
+  echo "Error: cross is not installed. Install it with: cargo install cross --locked"
+  exit 1
+fi
+
+# Ensure release directory exists
 RELEASE_DIR="release"
 mkdir -p $RELEASE_DIR
-
-# Ensure necessary tools are installed
-echo "Checking and installing necessary tools..."
-
-# Check and install nightly toolchain (required for MIPS build-std)
-echo "Checking nightly toolchain..."
-if ! rustup toolchain list | grep -q "nightly"; then
-    echo "Installing nightly toolchain..."
-    rustup toolchain install nightly
-else
-    echo "✓ Nightly toolchain already installed"
-fi
-
-echo "Checking rust-src component for nightly (required for build-std)..."
-if ! rustup component list --toolchain nightly | grep -q "rust-src (installed)"; then
-    echo "Installing rust-src component for nightly..."
-    rustup component add rust-src --toolchain nightly
-else
-    echo "✓ rust-src already installed for nightly"
-fi
 
 # Build target platform lists
 DEFAULT_TARGETS=(
   # x86_64 architecture
   "x86_64-unknown-linux-musl"
-  
+
   # AArch64 (ARM64) architecture
   "aarch64-unknown-linux-musl"
-  
+
   # ARM 32-bit architecture
   "armv7-unknown-linux-musleabihf"
   "armv7-unknown-linux-musleabi"
   "armv5te-unknown-linux-musleabi"
   "arm-unknown-linux-musleabi"
   "arm-unknown-linux-musleabihf"
-  
+
   # RISC-V architecture (emerging open source architecture)
   "riscv64gc-unknown-linux-musl"
 
@@ -54,7 +38,7 @@ DEFAULT_TARGETS=(
   "powerpc64le-unknown-linux-musl"
 )
 
-MIPS_TARGETS=(
+NIGHTLY_TARGETS=(
   # MIPS 32-bit architectures (built with nightly + build-std)
   "mips-unknown-linux-musl"
   "mipsel-unknown-linux-musl"
@@ -95,34 +79,33 @@ FAILED_TARGETS=()
 echo "Starting build for all target platforms..."
 echo "========================================"
 
-# Build for each default target platform
+# Build for each default target platform using cross
 for TARGET in "${DEFAULT_TARGETS[@]}"; do
   echo ""
   echo "Starting build for $TARGET..."
-  
-  # Build release version
-  if cargo build -q --release --target "$TARGET"; then
+
+  if cross build -q --release --target "$TARGET"; then
     echo "✓ Build successful: $TARGET"
     package_target "$TARGET"
   else
-    echo "✗ cargo build failed: $TARGET"
+    echo "✗ cross build failed: $TARGET"
     FAILED_COUNT=$((FAILED_COUNT + 1))
     FAILED_TARGETS+=("$TARGET")
   fi
-  
+
   echo "----------------------------------------"
 done
 
-# Build for each MIPS target platform (nightly + build-std)
-for TARGET in "${MIPS_TARGETS[@]}"; do
+# Build for each nightly target platform (nightly + build-std) using cross
+for TARGET in "${NIGHTLY_TARGETS[@]}"; do
   echo ""
   echo "Starting build for $TARGET (nightly + build-std)..."
 
-  if cargo +nightly build -q -Z build-std --release --target "$TARGET"; then
+  if cross +nightly build -q -Z build-std=std,panic_abort --release --target "$TARGET"; then
     echo "✓ Build successful (nightly build-std): $TARGET"
     package_target "$TARGET"
   else
-    echo "✗ cargo +nightly -Z build-std failed: $TARGET"
+    echo "✗ cross +nightly -Z build-std failed: $TARGET"
     FAILED_COUNT=$((FAILED_COUNT + 1))
     FAILED_TARGETS+=("$TARGET")
   fi
