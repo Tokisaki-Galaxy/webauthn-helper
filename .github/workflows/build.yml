@@ -86,7 +86,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set version in Cargo.toml
+      - name: Sync version in Cargo.toml (Dev only)
+        if: github.ref_type != 'tag'
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           sed -i "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
