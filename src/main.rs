@@ -4,8 +4,6 @@ mod errors;
 mod schemas;
 mod storage;
 
-use clap::Parser;
-
 use cli::{Cli, Commands, CredentialAction};
 use errors::AppError;
 use schemas::ErrorResponse;
