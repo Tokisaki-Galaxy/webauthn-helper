@@ -210,3 +210,11 @@ jobs:
           generate_release_notes: true
           body_path: release.txt
           files: release/*
+
+      - name: Notify OpenWrt Project
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/Tokisaki-Galaxy/openwrt-webauthn-helper/dispatches \
+            -d '{"event_type":"sync-upstream"}'
