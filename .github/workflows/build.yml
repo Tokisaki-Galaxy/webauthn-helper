@@ -182,15 +182,34 @@ jobs:
 
       - name: Install UPX
         run: |
-          # Get the latest UPX release version from GitHub
-          UPX_VERSION=$(curl -s https://api.github.com/repos/upx/upx/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
-          echo "Installing UPX ${UPX_VERSION}"
-          wget -q https://github.com/upx/upx/releases/download/${UPX_VERSION}/upx-${UPX_VERSION#v}-amd64_linux.tar.xz
-          tar -xf upx-${UPX_VERSION#v}-amd64_linux.tar.xz
-          sudo mv upx-${UPX_VERSION#v}-amd64_linux/upx /usr/local/bin/
-          sudo chmod +x /usr/local/bin/upx
-          rm -rf upx-${UPX_VERSION#v}-amd64_linux*
-          upx --version
+          echo "Attempting to detect latest UPX version via redirection..."
+          DETECTED_TAG=$(curl -sI https://github.com/upx/upx/releases/latest | grep -i "location:" | awk -F'/' '{print $NF}' | tr -d '\r' | tr -d '\n')
+          
+          if [ -z "$DETECTED_TAG" ] || [ "$DETECTED_TAG" = "latest" ]; then
+            echo "⚠️  Failed to detect version or API limit reached. Falling back to v5.1.0"
+            UPX_VERSION="v5.1.0"
+          else
+            UPX_VERSION=$DETECTED_TAG
+            echo "✅ Detected latest version: ${UPX_VERSION}"
+          fi
+
+          PURE_VER=$(echo ${UPX_VERSION} | sed 's/^v//')
+          
+          echo "Downloading UPX ${UPX_VERSION}..."
+          URL="https://github.com/upx/upx/releases/download/${UPX_VERSION}/upx-${PURE_VER}-amd64_linux.tar.xz"
+          
+          if wget -q --method=HEAD "$URL"; then
+            wget -q "$URL"
+            tar -xf upx-${PURE_VER}-amd64_linux.tar.xz
+            sudo mv upx-${PURE_VER}-amd64_linux/upx /usr/local/bin/
+            sudo chmod +x /usr/local/bin/upx
+            rm -rf upx-${PURE_VER}-amd64_linux*
+            upx --version
+          else
+            echo "❌ Error: Download URL not found: $URL"
+            echo "Please check if version ${UPX_VERSION} exists on GitHub."
+            exit 1
+          fi
 
       - name: Extract, compress and display comparison
         env:
