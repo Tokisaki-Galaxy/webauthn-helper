@@ -36,10 +36,7 @@ fn cli_help_flag() {
 fn cli_version_flag() {
     let expected_version = env!("CARGO_PKG_VERSION");
 
-    let output = cmd()
-        .arg("--version")
-        .output()
-        .expect("Failed to execute --version");
+    let output = cmd().arg("--version").output().expect("Failed to execute --version");
 
     assert!(output.status.success(), "The --version command itself failed");
 
