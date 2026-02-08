@@ -182,8 +182,14 @@ jobs:
 
       - name: Install UPX
         run: |
-          sudo apt-get update
-          sudo apt-get install -y upx-ucl
+          # Get the latest UPX release version from GitHub
+          UPX_VERSION=$(curl -s https://api.github.com/repos/upx/upx/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+          echo "Installing UPX ${UPX_VERSION}"
+          wget -q https://github.com/upx/upx/releases/download/${UPX_VERSION}/upx-${UPX_VERSION#v}-amd64_linux.tar.xz
+          tar -xf upx-${UPX_VERSION#v}-amd64_linux.tar.xz
+          sudo mv upx-${UPX_VERSION#v}-amd64_linux/upx /usr/local/bin/
+          sudo chmod +x /usr/local/bin/upx
+          rm -rf upx-${UPX_VERSION#v}-amd64_linux*
           upx --version
 
       - name: Extract, compress and display comparison
@@ -218,7 +224,8 @@ jobs:
 
                 # Compress with UPX (skip if unsupported architecture)
                 # Using --best --lzma for maximum compression ratio
-                if upx --best --lzma "$EXECUTABLE" 2>/dev/null; then
+                # Suppress output and capture it to avoid table formatting issues
+                if upx --best --lzma "$EXECUTABLE" > /tmp/upx_output.txt 2>&1; then
                   # Get size after compression
                   SIZE_AFTER=$(stat -c%s "$EXECUTABLE")
                   SIZE_AFTER_KB=$((SIZE_AFTER / 1024))
@@ -234,7 +241,8 @@ jobs:
 
                 # Re-package the compressed files
                 cd workdir
-                if ! tar -czvf "../release/${BASENAME}.tar.gz" "$(basename "$PACKAGE_DIR")"; then
+                tar -czf "../release/${BASENAME}.tar.gz" "$(basename "$PACKAGE_DIR")" > /dev/null 2>&1
+                if [ $? -ne 0 ]; then
                   echo "Error: Failed to create tarball for ${TARGET}"
                   exit 1
                 fi
