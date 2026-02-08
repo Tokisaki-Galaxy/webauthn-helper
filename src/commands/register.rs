@@ -19,8 +19,12 @@ fn make_rp_id(rp_id: &str) -> Result<RpId, AppError> {
 }
 
 fn format_aaguid(bytes: &[u8]) -> String {
-    let hex = data_encoding::HEXLOWER.encode(bytes);
-    if hex.len() == 32 {
+    if bytes.len() == 16 {
+        let hex: String = bytes.iter().fold(String::with_capacity(32), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{:02x}", b);
+            s
+        });
         format!(
             "{}-{}-{}-{}-{}",
             &hex[0..8],

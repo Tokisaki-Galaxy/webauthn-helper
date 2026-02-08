@@ -79,7 +79,7 @@ fn challenge_save_load_roundtrip() {
         username: "root".to_string(),
         rp_id: "192.168.1.1".to_string(),
         state: URL_SAFE_NO_PAD.encode(b"random_server_state_bytes"),
-        created_at: chrono::Utc::now().to_rfc3339(),
+        created_at: "2025-01-01T00:00:00Z".to_string(),
     };
 
     let path = challenge_dir.join(format!("{}.json", challenge_id));
