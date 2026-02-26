@@ -2,7 +2,7 @@
 set -e
 
 # Define project name and version
-PROJECT_NAME="webauthn-helper"
+PROJECT_NAME="rust-template"
 VERSION=$(grep "^version" Cargo.toml | cut -d '"' -f2)
 echo "Build version: $VERSION"
 
