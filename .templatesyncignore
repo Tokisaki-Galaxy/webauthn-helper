@@ -1,0 +1,13 @@
+.all-contributorsrc
+.github/dependabot.yml
+.templatesyncignore
+.github/workflows/*
+.gitignore
+.vscode/*
+Cargo.toml
+README.md
+Dockerfile
+SECURITY.md
+docker-compose.yml
+Makefile
+LICENSE
