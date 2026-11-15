@@ -9,6 +9,12 @@ use errors::AppError;
 use schemas::ErrorResponse;
 use storage::FileStorage;
 
+fn read_stdin() -> Result<String, AppError> {
+    let mut input = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+    Ok(input)
+}
+
 fn run() -> Result<String, AppError> {
     let cli = Cli::parse();
     let storage = FileStorage::new();
@@ -24,11 +30,15 @@ fn run() -> Result<String, AppError> {
             challenge_id,
             origin,
             device_name,
-        } => commands::register::register_finish(&storage, &challenge_id, &origin, &device_name),
+        } => commands::register::register_finish(&storage, &challenge_id, &origin, &device_name, &read_stdin()?),
 
-        Commands::LoginBegin { username, rp_id } => commands::login::login_begin(&storage, &username, &rp_id),
+        Commands::LoginBegin {
+            username: Some(username),
+            rp_id,
+        } => commands::login::login_begin(&storage, &username, &rp_id),
+        Commands::LoginBegin { username: None, rp_id } => commands::login::login_begin_discoverable(&storage, &rp_id),
 
-        Commands::LoginFinish { challenge_id, origin } => commands::login::login_finish(&storage, &challenge_id, &origin),
+        Commands::LoginFinish { challenge_id, origin } => commands::login::login_finish(&storage, &challenge_id, &origin, &read_stdin()?),
 
         Commands::CredentialManage { action } => match action {
             CredentialAction::List { username } => commands::credential::list_credentials(&storage, &username),

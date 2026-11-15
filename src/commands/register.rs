@@ -92,9 +92,16 @@ pub fn register_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str
     let uv = match user_verification {
         "required" => UserVerificationRequirement::Required,
         "discouraged" => UserVerificationRequirement::Discouraged,
-        _ => UserVerificationRequirement::Preferred,
+        "preferred" => UserVerificationRequirement::Preferred,
+        _ => UserVerificationRequirement::Required,
     };
     options.authenticator_selection.user_verification = uv;
+    // Ask for credProtect but don't insist on it: an enforced policy made
+    // registration fail in testing, and platform passkeys (iCloud Keychain,
+    // Google Password Manager) don't appear to support the extension. User
+    // verification is required at every login regardless.
+    options.extensions.cred_protect =
+        webauthn_rp::request::register::CredProtect::UserVerificationRequired(webauthn_rp::request::ExtensionInfo::AllowDontEnforceValue);
     // When UV is not Required, clear extensions that require UV to avoid validation errors
     if !matches!(uv, UserVerificationRequirement::Required) {
         options.extensions.cred_protect = webauthn_rp::request::register::CredProtect::None;
@@ -128,8 +135,16 @@ pub fn register_begin(storage: &dyn StorageProvider, username: &str, rp_id: &str
     Ok(serde_json::to_string(&response)?)
 }
 
-pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin_str: &str, device_name: &str) -> Result<String, AppError> {
+/// `input` is the client's attestation JSON (read from stdin by the CLI).
+pub fn register_finish(
+    storage: &dyn StorageProvider,
+    challenge_id: &str,
+    origin_str: &str,
+    device_name: &str,
+    input: &str,
+) -> Result<String, AppError> {
     let challenge = storage.load_challenge(challenge_id)?;
+    storage.delete_challenge(challenge_id)?;
     if challenge.challenge_type != ChallengeType::Registration {
         return Err(AppError::InvalidInput("Challenge is not a registration challenge".to_string()));
     }
@@ -151,9 +166,6 @@ pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin
     let server_state = RegistrationServerState::<64>::decode(state_bytes.as_slice())
         .map_err(|e| AppError::Storage(format!("Failed to decode registration state: {}", e)))?;
 
-    // Read client response from stdin
-    let mut input = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
     let registration =
         Registration::from_json_relaxed(input.as_bytes()).map_err(|e| AppError::InvalidInput(format!("Invalid client response: {}", e)))?;
 
@@ -187,6 +199,7 @@ pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin
     let backup_eligible = !matches!(dynamic_state.backup, Backup::NotEligible);
 
     // Save credential
+    let _lock = storage.lock()?;
     let mut store = storage.load_credentials()?;
     let user_record = store.users.entry(challenge.username.clone()).or_insert_with(|| UserRecord {
         user_id: user_handle_b64.clone(),
@@ -207,8 +220,6 @@ pub fn register_finish(storage: &dyn StorageProvider, challenge_id: &str, origin
         sign_count: dynamic_state.sign_count,
     });
     storage.save_credentials(&store)?;
-
-    storage.delete_challenge(challenge_id)?;
 
     let data = RegisterFinishData {
         credential_id: credential_id_str,
