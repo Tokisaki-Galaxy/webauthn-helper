@@ -28,6 +28,10 @@ pub fn list_credentials(storage: &dyn StorageProvider, username: &str) -> Result
 }
 
 pub fn delete_credential(storage: &dyn StorageProvider, credential_id: &str) -> Result<String, AppError> {
+    if !storage.credentials_path().exists() {
+        return Err(AppError::CredentialNotFound(credential_id.to_string()));
+    }
+    let _lock = storage.lock()?;
     let mut store = storage.load_credentials()?;
     let mut found = false;
 
@@ -54,6 +58,10 @@ pub fn delete_credential(storage: &dyn StorageProvider, credential_id: &str) -> 
 }
 
 pub fn update_credential(storage: &dyn StorageProvider, credential_id: &str, new_name: &str) -> Result<String, AppError> {
+    if !storage.credentials_path().exists() {
+        return Err(AppError::CredentialNotFound(credential_id.to_string()));
+    }
+    let _lock = storage.lock()?;
     let mut store = storage.load_credentials()?;
     let mut old_name = None;
 

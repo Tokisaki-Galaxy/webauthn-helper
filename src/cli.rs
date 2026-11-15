@@ -14,7 +14,8 @@ pub enum Commands {
         device_name: String,
     },
     LoginBegin {
-        username: String,
+        /// None starts a passwordless (discoverable credential) login.
+        username: Option<String>,
         rp_id: String,
     },
     LoginFinish {
@@ -130,7 +131,7 @@ impl Cli {
             "register-begin" => {
                 let username = require_option(&mut args, "--username");
                 let rp_id = require_option(&mut args, "--rp-id");
-                let user_verification = take_option(&mut args, "--user-verification").unwrap_or_else(|| "preferred".to_string());
+                let user_verification = take_option(&mut args, "--user-verification").unwrap_or_else(|| "required".to_string());
                 Commands::RegisterBegin {
                     username,
                     rp_id,
@@ -148,7 +149,7 @@ impl Cli {
                 }
             }
             "login-begin" => {
-                let username = require_option(&mut args, "--username");
+                let username = take_option(&mut args, "--username");
                 let rp_id = require_option(&mut args, "--rp-id");
                 Commands::LoginBegin { username, rp_id }
             }
