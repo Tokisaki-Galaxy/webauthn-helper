@@ -18,6 +18,8 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+p256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
 
 # Optimize compilation size
 [profile.dev]
