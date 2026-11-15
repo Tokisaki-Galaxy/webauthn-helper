@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,8 +9,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::AppError;
 
-/// Challenge files older than this are considered expired (2 minutes)
-const CHALLENGE_MAX_AGE_SECS: u64 = 120;
+/// Challenge files older than this are considered expired (5 minutes, the
+/// ceremony timeout webauthn_rp puts in the options)
+const CHALLENGE_MAX_AGE_SECS: u64 = 300;
+
+/// Login challenges can be requested before the user is authenticated, so
+/// cap how many may be pending at once.
+pub(crate) const MAX_PENDING_CHALLENGES: usize = 64;
 
 // ─── Internal Storage Structs (snake_case) ───
 
@@ -57,7 +62,11 @@ pub struct ChallengeState {
 pub enum ChallengeType {
     Registration,
     Authentication,
+    DiscoverableAuthentication,
 }
+
+/// Holds the credential store lock; released on drop.
+pub struct StoreLock(#[allow(dead_code)] Option<fs::File>);
 
 // ─── StorageProvider Trait ───
 
@@ -69,6 +78,18 @@ pub trait StorageProvider {
     fn delete_challenge(&self, challenge_id: &str) -> Result<(), AppError>;
     fn cleanup_challenges(&self) -> Result<usize, AppError>;
     fn credentials_path(&self) -> &Path;
+    /// Take an exclusive lock covering a whole read-modify-write of the
+    /// credential store.
+    fn lock(&self) -> Result<StoreLock, AppError>;
+}
+
+/// Challenge IDs are UUIDs we generated; anything else never names a file.
+fn validate_challenge_id(challenge_id: &str) -> Result<(), AppError> {
+    if uuid::Uuid::parse_str(challenge_id).is_ok() && challenge_id.len() == 36 {
+        Ok(())
+    } else {
+        Err(AppError::ChallengeNotFound(challenge_id.to_string()))
+    }
 }
 
 // ─── FileStorage Implementation ───
@@ -106,29 +127,32 @@ impl StorageProvider for FileStorage {
     }
 
     fn save_credentials(&self, store: &CredentialStore) -> Result<(), AppError> {
-        if let Some(parent) = self.credentials_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        let parent = self.credentials_path.parent().unwrap_or(Path::new("/"));
+        fs::create_dir_all(parent)?;
 
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&self.credentials_path)?;
-
-        // Acquire exclusive lock
-        file.lock_exclusive()
-            .map_err(|e| AppError::Storage(format!("Failed to acquire file lock: {}", e)))?;
-
+        // Write a temporary file and rename it over the store, so a reader
+        // or a power cut never sees a partial file.
+        let tmp_path = self.credentials_path.with_extension("json.tmp");
         let data = serde_json::to_string_pretty(store)?;
-        (&file).write_all(data.as_bytes())?;
-
-        // Lock is released when file is dropped
+        {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp_path)?;
+            file.write_all(data.as_bytes())?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp_path, &self.credentials_path)?;
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
         Ok(())
     }
 
     fn load_challenge(&self, challenge_id: &str) -> Result<ChallengeState, AppError> {
+        validate_challenge_id(challenge_id)?;
         let path = self.challenge_dir.join(format!("{}.json", challenge_id));
         if !path.exists() {
             return Err(AppError::ChallengeNotFound(challenge_id.to_string()));
@@ -139,14 +163,37 @@ impl StorageProvider for FileStorage {
     }
 
     fn save_challenge(&self, challenge_id: &str, state: &ChallengeState) -> Result<(), AppError> {
+        validate_challenge_id(challenge_id)?;
         fs::create_dir_all(&self.challenge_dir)?;
+        fs::set_permissions(&self.challenge_dir, fs::Permissions::from_mode(0o700))?;
+
+        // Login challenges can be requested before anyone is authenticated
+        // (and the login page asks for one on every view, for autofill), so
+        // keep at most MAX_PENDING_CHALLENGES by dropping the oldest. Refusing
+        // new ones instead would let anyone lock passkey login out.
+        self.cleanup_challenges()?;
+        let mut pending: Vec<(SystemTime, PathBuf)> = fs::read_dir(&self.challenge_dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+            .map(|p| (fs::metadata(&p).and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH), p))
+            .collect();
+        if pending.len() >= MAX_PENDING_CHALLENGES {
+            pending.sort();
+            for (_, path) in pending.iter().take(pending.len() + 1 - MAX_PENDING_CHALLENGES) {
+                let _ = fs::remove_file(path);
+            }
+        }
+
         let path = self.challenge_dir.join(format!("{}.json", challenge_id));
         let data = serde_json::to_string_pretty(state)?;
-        fs::write(&path, data)?;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+        file.write_all(data.as_bytes())?;
         Ok(())
     }
 
     fn delete_challenge(&self, challenge_id: &str) -> Result<(), AppError> {
+        validate_challenge_id(challenge_id)?;
         let path = self.challenge_dir.join(format!("{}.json", challenge_id));
         if path.exists() {
             fs::remove_file(&path)?;
@@ -183,6 +230,20 @@ impl StorageProvider for FileStorage {
 
     fn credentials_path(&self) -> &Path {
         &self.credentials_path
+    }
+
+    fn lock(&self) -> Result<StoreLock, AppError> {
+        let parent = self.credentials_path.parent().unwrap_or(Path::new("/"));
+        fs::create_dir_all(parent)?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(self.credentials_path.with_extension("lock"))?;
+        file.lock_exclusive()
+            .map_err(|e| AppError::Storage(format!("Failed to acquire file lock: {}", e)))?;
+        Ok(StoreLock(Some(file)))
     }
 }
 
